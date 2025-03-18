@@ -1,0 +1,14 @@
+{
+  "name": "worbyta-proxy",
+  "version": "1.0.0",
+  "description": "Proxy para redirecionar worbyta.com para controle-bc.bubbleapps.io",
+  "main": "src/index.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^4.1.0"
+  }
+}
+
