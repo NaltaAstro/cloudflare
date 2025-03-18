@@ -1,0 +1,9 @@
+name = "worbyta-proxy"
+main = "src/index.js"
+compatibility_date = "2023-12-01"
+
+# Configuração de rotas
+routes = [
+  { pattern = "worbyta.com/*", zone_name = "worbyta.com" }
+]
+
