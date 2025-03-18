@@ -54,7 +54,7 @@ async function handleRequest(request) {
       let text = await response.text()
       
       // Substituir todas as referências ao domínio do Bubble
-      text = text.replace(/https:\/\/controle-bc\.bubbleapps\.io/g, 'https://tenhopedido.com')
+      text = text.replace(/https:\/\/controle-bc\.bubbleapps\.io/g, 'https://worbyta.com')
       
       // Criar uma nova resposta com o texto modificado
       return new Response(text, {
