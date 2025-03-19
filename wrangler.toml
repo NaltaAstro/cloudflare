@@ -7,3 +7,9 @@ routes = [
   { pattern = "worbyta.com/*", zone_name = "worbyta.com" }
 ]
 
+# wrangler.toml (wrangler v3.88.0^)
+[observability.logs]
+enabled = false
+
+
+
