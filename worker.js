@@ -13,24 +13,71 @@ async function handleRequest(request) {
   // Criar uma URL para o Bubble.io
   const bubbleUrl = new URL(url.pathname + url.search, `https://${TARGET_HOSTNAME}`)
   
-  // Clonar os cabeçalhos
-  const newHeaders = new Headers(request.headers)
+  // Verificar se é uma solicitação OPTIONS (CORS preflight)
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": request.headers.get("Origin") || "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, Cookie, X-Requested-With, X-Bubble-*",
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Max-Age": "86400"
+      }
+    })
+  }
+  
+  // Clonar os cabeçalhos e preservar todos os headers X-Bubble-*
+  const newHeaders = new Headers()
+  for (const [key, value] of request.headers.entries()) {
+    // Preservar todos os headers originais exceto host e origin
+    if (key.toLowerCase() !== 'host' && key.toLowerCase() !== 'origin') {
+      newHeaders.set(key, value)
+    }
+  }
+  
+  // Definir os headers específicos para o Bubble
   newHeaders.set('Host', TARGET_HOSTNAME)
   newHeaders.set('Origin', `https://${TARGET_HOSTNAME}`)
   newHeaders.set('Referer', `https://${TARGET_HOSTNAME}${url.pathname}`)
   
-  // Remover cabeçalhos problemáticos
-  newHeaders.delete('CF-Connecting-IP')
-  newHeaders.delete('CF-IPCountry')
-  newHeaders.delete('CF-RAY')
-  newHeaders.delete('CF-Visitor')
-  newHeaders.delete('CF-Worker')
+  // Preservar cookies
+  const cookieHeader = request.headers.get('Cookie')
+  if (cookieHeader) {
+    newHeaders.set('Cookie', cookieHeader)
+  }
+  
+  // Obter o corpo da solicitação
+  let requestBody = null
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    try {
+      // Tentar obter o corpo como texto
+      const bodyText = await request.text()
+      
+      // Se for JSON, modificar as referências ao domínio
+      if (request.headers.get('Content-Type')?.includes('application/json')) {
+        try {
+          const bodyJson = JSON.parse(bodyText)
+          const modifiedBodyText = JSON.stringify(bodyJson).replace(new RegExp(YOUR_HOSTNAME, 'g'), TARGET_HOSTNAME)
+          requestBody = modifiedBodyText
+        } catch (e) {
+          // Se não for JSON válido, usar o texto original
+          requestBody = bodyText
+        }
+      } else {
+        requestBody = bodyText
+      }
+    } catch (e) {
+      // Se não conseguir obter o corpo, continuar sem ele
+      console.error('Erro ao obter o corpo da solicitação:', e)
+    }
+  }
   
   // Criar a nova solicitação
   const newRequest = new Request(bubbleUrl, {
     method: request.method,
     headers: newHeaders,
-    body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
+    body: requestBody,
     redirect: 'manual'
   })
   
@@ -39,7 +86,6 @@ async function handleRequest(request) {
   try {
     response = await fetch(newRequest, {
       cf: {
-        // Usar um IP diferente para cada solicitação para evitar limitação de taxa
         cacheEverything: false,
         cacheTtl: 0,
         scrapeShield: false,
@@ -61,28 +107,56 @@ async function handleRequest(request) {
         })
       }
     }
+    
+    // Tratamento especial para erros 401 em solicitações de logout
+    if (response.status === 401 && url.pathname.includes('/workflow/start')) {
+      // Verificar se é uma solicitação de logout pelo corpo
+      if (requestBody && requestBody.includes('logout')) {
+        // Simular uma resposta de sucesso para o logout
+        return new Response(JSON.stringify({
+          status: "success",
+          message: "Logout successful"
+        }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": request.headers.get("Origin") || "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, Cookie, X-Requested-With",
+            "Access-Control-Allow-Credentials": "true"
+          }
+        })
+      }
+    }
   } catch (e) {
     return new Response('Erro ao acessar o servidor: ' + e.message, { status: 500 })
   }
   
   // Clonar a resposta para modificá-la
-  const responseHeaders = new Headers(response.headers)
+  const responseHeaders = new Headers()
+  
+  // Copiar todos os headers da resposta
+  for (const [key, value] of response.headers.entries()) {
+    if (key.toLowerCase() !== 'set-cookie') {
+      responseHeaders.set(key, value)
+    }
+  }
   
   // Adicionar cabeçalhos CORS
   responseHeaders.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*')
   responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-  responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With')
+  responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With, X-Bubble-*')
   responseHeaders.set('Access-Control-Allow-Credentials', 'true')
   
   // Processar cookies
-  if (responseHeaders.has('Set-Cookie')) {
-    const cookies = responseHeaders.getAll('Set-Cookie')
-    responseHeaders.delete('Set-Cookie')
+  if (response.headers.has('Set-Cookie')) {
+    const cookies = response.headers.getAll('Set-Cookie')
     
     for (const cookie of cookies) {
       let newCookie = cookie
         .replace(`Domain=${TARGET_HOSTNAME}`, `Domain=${YOUR_HOSTNAME}`)
         .replace(/Domain=\.bubbleapps\.io/gi, `Domain=${YOUR_HOSTNAME}`)
+        .replace(/SameSite=None/gi, 'SameSite=Lax') // Ajustar SameSite para melhor compatibilidade
       
       if (!newCookie.includes('Domain=')) {
         newCookie += `; Domain=${YOUR_HOSTNAME}`
@@ -157,6 +231,24 @@ async function handleRequest(request) {
       // Ignorar tentativas de definir document.domain
     }
   });
+  
+  // Interceptar o evento de logout para garantir que funcione corretamente
+  document.addEventListener('click', function(e) {
+    if (e.target && (
+        e.target.id === 'logout-button' || 
+        e.target.classList.contains('logout-button') ||
+        (e.target.textContent && e.target.textContent.toLowerCase().includes('logout')) ||
+        (e.target.innerText && e.target.innerText.toLowerCase().includes('logout'))
+    )) {
+      // Adicionar um pequeno atraso para garantir que o logout seja processado corretamente
+      setTimeout(function() {
+        // Limpar cookies manualmente
+        document.cookie.split(';').forEach(function(c) {
+          document.cookie = c.trim().split('=')[0] + '=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;domain=${YOUR_HOSTNAME}';
+        });
+      }, 100);
+    }
+  }, true);
 </script>`;
         
         // Inserir o script após a tag <head>
