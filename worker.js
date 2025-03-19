@@ -100,30 +100,30 @@ async function handleRequest(request) {
       
       // Adicionar scripts de interceptação semelhantes ao CoAlias
       if (contentType.includes('text/html')) {
+        // Script corrigido com escape adequado de aspas e sem quebras de linha indevidas
         const interceptScript = `
-        <script id="worbyta_xhr_interceptor">
-          // Interceptar XMLHttpRequest
-          var xhr_original_open = XMLHttpRequest.prototype.open;
-          XMLHttpRequest.prototype.open = function() {
-            if (arguments[1] !== undefined && typeof arguments[1] == 'string' && 
-                arguments[1].includes("https://${TARGET_URL_HOSTNAME}")) {
-              arguments[1] = arguments[1].replace("https://${TARGET_URL_HOSTNAME}", "https://${REQUEST_HOSTNAME_ORIGINAL}");
-              console.log('XMLHttpRequest changed to ' + arguments[1]);
-            }
-            xhr_original_open.apply(this, arguments);
-          }
-          
-          // Interceptar fetch
-          const fetch_original = fetch;
-          fetch = function(url, options) {
-            if(url !== undefined && typeof url == 'string' && url.includes("https://${TARGET_URL_HOSTNAME}")) {
-              url = url.replace("https://${TARGET_URL_HOSTNAME}", "https://${REQUEST_HOSTNAME_ORIGINAL}");
-              console.log('fetch changed to ' + url);
-            }
-            return fetch_original.call(this, url, options);
-          };
-        </script>
-        `;
+<script id="worbyta_xhr_interceptor">
+  // Interceptar XMLHttpRequest
+  var xhr_original_open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function() {
+    if (arguments[1] !== undefined && typeof arguments[1] === 'string' && 
+        arguments[1].includes("https://${TARGET_URL_HOSTNAME}")) {
+      arguments[1] = arguments[1].replace("https://${TARGET_URL_HOSTNAME}", "https://${REQUEST_HOSTNAME_ORIGINAL}");
+      console.log('XMLHttpRequest changed to ' + arguments[1]);
+    }
+    xhr_original_open.apply(this, arguments);
+  };
+  
+  // Interceptar fetch
+  const fetch_original = fetch;
+  fetch = function(url, options) {
+    if(url !== undefined && typeof url === 'string' && url.includes("https://${TARGET_URL_HOSTNAME}")) {
+      url = url.replace("https://${TARGET_URL_HOSTNAME}", "https://${REQUEST_HOSTNAME_ORIGINAL}");
+      console.log('fetch changed to ' + url);
+    }
+    return fetch_original.call(this, url, options);
+  };
+</script>`;
         
         // Inserir o script após a tag <head>
         text = text.replace('</head>', interceptScript + '</head>');
