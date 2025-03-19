@@ -3,6 +3,10 @@ addEventListener('fetch', event => {
 })
 
 async function handleRequest(request) {
+  // Configurações
+  const TARGET_URL_HOSTNAME = "controle-bc.bubbleapps.io";
+  const REQUEST_HOSTNAME_ORIGINAL = "worbyta.com";
+  
   // Verificar se é uma solicitação OPTIONS (CORS preflight)
   if (request.method === 'OPTIONS') {
     return new Response(null, {
@@ -10,92 +14,135 @@ async function handleRequest(request) {
       headers: {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, Cookie',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, Cookie, X-Requested-With',
         'Access-Control-Allow-Credentials': 'true',
         'Access-Control-Max-Age': '86400'
       }
     })
   }
   
-  // Criar uma nova URL apontando para o Bubble.io
-  const url = new URL(request.url)
-  const bubbleUrl = new URL(request.url)
-  bubbleUrl.hostname = 'controle-bc.bubbleapps.io'
+  // Obter a URL da solicitação
+  const url = new URL(request.url);
   
-  // Clonar os cabeçalhos e modificar o host
-  const newHeaders = new Headers(request.headers)
-  newHeaders.set('Host', 'controle-bc.bubbleapps.io')
+  // Criar uma URL para o Bubble.io
+  const bubbleUrl = new URL(url.pathname + url.search, `https://${TARGET_URL_HOSTNAME}`);
   
-  // Clonar a solicitação com a nova URL e cabeçalhos
+  // Clonar os cabeçalhos
+  const newHeaders = new Headers(request.headers);
+  newHeaders.set('Host', TARGET_URL_HOSTNAME);
+  
+  // Criar a nova solicitação
   const newRequest = new Request(bubbleUrl, {
     method: request.method,
     headers: newHeaders,
     body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
-    redirect: 'manual', // Importante para controlar redirecionamentos
-    credentials: 'include' // Incluir cookies
-  })
+    redirect: 'manual'
+  });
   
   // Fazer a solicitação para o Bubble.io
-  let response
+  let response;
   try {
-    response = await fetch(newRequest)
+    response = await fetch(newRequest);
+    
+    // Lidar com redirecionamentos manualmente
+    if (response.status === 301 || response.status === 302 || response.status === 307 || response.status === 308) {
+      const location = response.headers.get('Location');
+      if (location) {
+        const newLocation = location.replace(TARGET_URL_HOSTNAME, REQUEST_HOSTNAME_ORIGINAL);
+        const redirectHeaders = new Headers(response.headers);
+        redirectHeaders.set('Location', newLocation);
+        return new Response(null, {
+          status: response.status,
+          headers: redirectHeaders
+        });
+      }
+    }
   } catch (e) {
-    return new Response('Erro ao acessar o servidor: ' + e.message, { status: 500 })
+    return new Response('Erro ao acessar o servidor: ' + e.message, { status: 500 });
   }
   
   // Clonar a resposta para modificá-la
-  const responseHeaders = new Headers(response.headers)
+  const responseHeaders = new Headers(response.headers);
   
   // Adicionar cabeçalhos CORS
-  responseHeaders.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*')
-  responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-  responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie')
-  responseHeaders.set('Access-Control-Allow-Credentials', 'true')
+  responseHeaders.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*');
+  responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie');
+  responseHeaders.set('Access-Control-Allow-Credentials', 'true');
   
-  // Processar cookies - modificar o domínio dos cookies
-  const cookies = responseHeaders.getAll('Set-Cookie')
-  if (cookies && cookies.length > 0) {
-    responseHeaders.delete('Set-Cookie')
+  // Processar cookies
+  if (responseHeaders.has('Set-Cookie')) {
+    const cookies = responseHeaders.getAll('Set-Cookie');
+    responseHeaders.delete('Set-Cookie');
     
     for (const cookie of cookies) {
-      // Substituir o domínio do cookie
       let newCookie = cookie
-        .replace(/Domain=controle-bc\.bubbleapps\.io/gi, `Domain=worbyta.com`)
-        .replace(/SameSite=None/gi, 'SameSite=Lax') // Ajustar SameSite para melhor compatibilidade
+        .replace(`Domain=${TARGET_URL_HOSTNAME}`, `Domain=${REQUEST_HOSTNAME_ORIGINAL}`)
+        .replace(/Domain=\.bubbleapps\.io/gi, `Domain=${REQUEST_HOSTNAME_ORIGINAL}`);
       
-      // Se o cookie não tiver um domínio explícito, adicionar um
       if (!newCookie.includes('Domain=')) {
-        newCookie += '; Domain=worbyta.com'
+        newCookie += `; Domain=${REQUEST_HOSTNAME_ORIGINAL}`;
       }
       
-      responseHeaders.append('Set-Cookie', newCookie)
+      responseHeaders.append('Set-Cookie', newCookie);
     }
   }
   
   // Verificar o tipo de conteúdo
-  const contentType = responseHeaders.get('content-type') || ''
+  const contentType = responseHeaders.get('content-type') || '';
   
-  // Se for texto ou JSON, modificar o conteúdo
+  // Se for texto, HTML, JavaScript ou JSON, modificar o conteúdo
   if (contentType.includes('text/') || 
       contentType.includes('application/json') || 
       contentType.includes('application/javascript')) {
     try {
-      let text = await response.text()
+      let text = await response.text();
+      
+      // Adicionar scripts de interceptação semelhantes ao CoAlias
+      if (contentType.includes('text/html')) {
+        const interceptScript = `
+        <script id="worbyta_xhr_interceptor">
+          // Interceptar XMLHttpRequest
+          var xhr_original_open = XMLHttpRequest.prototype.open;
+          XMLHttpRequest.prototype.open = function() {
+            if (arguments[1] !== undefined && typeof arguments[1] == 'string' && 
+                arguments[1].includes("https://${TARGET_URL_HOSTNAME}")) {
+              arguments[1] = arguments[1].replace("https://${TARGET_URL_HOSTNAME}", "https://${REQUEST_HOSTNAME_ORIGINAL}");
+              console.log('XMLHttpRequest changed to ' + arguments[1]);
+            }
+            xhr_original_open.apply(this, arguments);
+          }
+          
+          // Interceptar fetch
+          const fetch_original = fetch;
+          fetch = function(url, options) {
+            if(url !== undefined && typeof url == 'string' && url.includes("https://${TARGET_URL_HOSTNAME}")) {
+              url = url.replace("https://${TARGET_URL_HOSTNAME}", "https://${REQUEST_HOSTNAME_ORIGINAL}");
+              console.log('fetch changed to ' + url);
+            }
+            return fetch_original.call(this, url, options);
+          };
+        </script>
+        `;
+        
+        // Inserir o script após a tag <head>
+        text = text.replace('</head>', interceptScript + '</head>');
+      }
       
       // Substituir todas as referências ao domínio do Bubble
-      text = text.replace(/https:\/\/controle-bc\.bubbleapps\.io/g, 'https://worbyta.com')
-      
-      // Substituir referências a cookies e domínios
-      text = text.replace(/controle-bc\.bubbleapps\.io/g, 'worbyta.com')
+      text = text.replace(new RegExp(`https://${TARGET_URL_HOSTNAME}`, 'g'), `https://${REQUEST_HOSTNAME_ORIGINAL}`);
+      text = text.replace(new RegExp(`http://${TARGET_URL_HOSTNAME}`, 'g'), `https://${REQUEST_HOSTNAME_ORIGINAL}`);
+      text = text.replace(new RegExp(`//${TARGET_URL_HOSTNAME}`, 'g'), `//${REQUEST_HOSTNAME_ORIGINAL}`);
+      text = text.replace(new RegExp(TARGET_URL_HOSTNAME, 'g'), REQUEST_HOSTNAME_ORIGINAL);
       
       // Criar uma nova resposta com o texto modificado
       return new Response(text, {
         status: response.status,
         statusText: response.statusText,
         headers: responseHeaders
-      })
+      });
     } catch (e) {
-      return new Response('Erro ao processar a resposta: ' + e.message, { status: 500 })
+      return new Response('Erro ao processar a resposta: ' + e.message, { status: 500 });
     }
   }
   
@@ -104,5 +151,5 @@ async function handleRequest(request) {
     status: response.status,
     statusText: response.statusText,
     headers: responseHeaders
-  })
+  });
 }
