@@ -4,7 +4,7 @@ addEventListener('fetch', event => {
 
 async function handleRequest(request) {
   // Configurações
-  const TARGET_HOSTNAME = "controle-bc.bubbleapps.io"
+  const TARGET_HOSTNAME = "tenhopedido.com"
   const YOUR_HOSTNAME = "burgers-culture.tenhopedido.com"
   
   // Obter a URL da solicitação
