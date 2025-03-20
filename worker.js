@@ -32,9 +32,12 @@ async function handleRequest(request) {
     // Clonar os cabeçalhos
     const newHeaders = new Headers()
     
-    // Copiar todos os cabeçalhos originais, exceto host e origin
+    // Copiar todos os cabeçalhos originais, exceto host, origin e cookie (que trataremos separadamente)
     for (const [key, value] of request.headers.entries()) {
-      if (key.toLowerCase() !== 'host' && key.toLowerCase() !== 'origin' && key.toLowerCase() !== 'referer') {
+      if (key.toLowerCase() !== 'host' && 
+          key.toLowerCase() !== 'origin' && 
+          key.toLowerCase() !== 'referer' && 
+          key.toLowerCase() !== 'cookie') {
         newHeaders.set(key, value)
       }
     }
@@ -44,12 +47,20 @@ async function handleRequest(request) {
     newHeaders.set('Origin', `https://${MAIN_DOMAIN}`)
     newHeaders.set('Referer', `https://${MAIN_DOMAIN}${url.pathname}`)
     
-    // Preservar cookies
+    // Processar cookies da solicitação - PARTE CRÍTICA
     const cookieHeader = request.headers.get('Cookie')
     if (cookieHeader) {
-      // Modificar cookies para usar o domínio principal
-      const modifiedCookies = cookieHeader.replace(new RegExp(SUBDOMAIN, 'g'), MAIN_DOMAIN)
-      newHeaders.set('Cookie', modifiedCookies)
+      // Dividir os cookies individuais
+      const cookies = cookieHeader.split(';').map(cookie => cookie.trim())
+      
+      // Criar um novo array de cookies modificados
+      const modifiedCookies = cookies.map(cookie => {
+        // Não modificamos o valor do cookie, apenas garantimos que seja enviado corretamente
+        return cookie
+      })
+      
+      // Definir o cabeçalho Cookie modificado
+      newHeaders.set('Cookie', modifiedCookies.join('; '))
     }
     
     // Obter o corpo da solicitação
@@ -120,21 +131,53 @@ async function handleRequest(request) {
       responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With, X-Bubble-*')
       responseHeaders.set('Access-Control-Allow-Credentials', 'true')
       
-      // Processar cookies
+      // Processar cookies da resposta - PARTE CRÍTICA
       if (response.headers.has('Set-Cookie')) {
         const cookies = response.headers.getAll('Set-Cookie')
         
         for (const cookie of cookies) {
-          // Substituir o domínio nos cookies
-          let newCookie = cookie
-            .replace(`Domain=${MAIN_DOMAIN}`, `Domain=${SUBDOMAIN}`)
-            .replace(/Domain=\.tenhopedido\.com/gi, `Domain=.${SUBDOMAIN}`)
-            .replace(/SameSite=None/gi, 'SameSite=Lax')
+          // Analisar o cookie para extrair suas partes
+          const cookieParts = cookie.split(';').map(part => part.trim())
+          const cookieNameValue = cookieParts[0]
+          const remainingParts = cookieParts.slice(1)
           
-          if (!newCookie.includes('Domain=')) {
-            newCookie += `; Domain=${SUBDOMAIN}`
+          // Filtrar partes que contêm Domain= e Path=
+          const domainParts = remainingParts.filter(part => part.toLowerCase().startsWith('domain='))
+          const pathParts = remainingParts.filter(part => part.toLowerCase().startsWith('path='))
+          const otherParts = remainingParts.filter(part => 
+            !part.toLowerCase().startsWith('domain=') && 
+            !part.toLowerCase().startsWith('path=')
+          )
+          
+          // Construir o novo cookie com o domínio correto
+          let newCookieParts = [cookieNameValue]
+          
+          // Adicionar Domain= para o subdomínio
+          newCookieParts.push(`Domain=.tenhopedido.com`)
+          
+          // Adicionar Path= se existir, ou definir como /
+          if (pathParts.length > 0) {
+            newCookieParts.push(pathParts[0])
+          } else {
+            newCookieParts.push('Path=/')
           }
           
+          // Adicionar outras partes, exceto SameSite=None que pode causar problemas
+          for (const part of otherParts) {
+            if (!part.toLowerCase().startsWith('samesite=none')) {
+              newCookieParts.push(part)
+            }
+          }
+          
+          // Adicionar SameSite=Lax para melhor compatibilidade
+          if (!otherParts.some(part => part.toLowerCase().startsWith('samesite='))) {
+            newCookieParts.push('SameSite=Lax')
+          }
+          
+          // Juntar todas as partes em um único cookie
+          const newCookie = newCookieParts.join('; ')
+          
+          // Adicionar o cookie modificado aos cabeçalhos de resposta
           responseHeaders.append('Set-Cookie', newCookie)
         }
       }
@@ -198,46 +241,82 @@ async function handleRequest(request) {
   // Corrigir document.domain
   Object.defineProperty(document, 'domain', {
     get: function() {
-      return '${SUBDOMAIN}';
+      return 'tenhopedido.com';
     },
     set: function() {
       // Ignorar tentativas de definir document.domain
     }
   });
   
-  // Corrigir problemas de autenticação do Bubble
-  window.addEventListener('load', function() {
-    // Verificar se o objeto Bubble existe
-    if (window.Bubble) {
-      // Sobrescrever a função de verificação de UID
-      var originalRecheckUid = Bubble.recheck_uid;
-      Bubble.recheck_uid = function() {
-        // Implementar uma versão personalizada ou simplesmente retornar uma promessa resolvida
-        return new Promise(function(resolve) {
-          resolve();
-        });
-      };
-    }
-    
-    // Corrigir problemas com o objeto localStorage
-    var originalGetItem = localStorage.getItem;
-    localStorage.getItem = function(key) {
-      var value = originalGetItem.call(this, key);
-      if (key && key.includes('bubble_') && value) {
-        try {
-          var parsed = JSON.parse(value);
-          if (parsed && typeof parsed === 'object') {
-            // Substituir todas as ocorrências do domínio principal pelo subdomínio
-            value = JSON.stringify(parsed).replace(new RegExp(${MAIN_DOMAIN}, 'g'), ${SUBDOMAIN});
-            localStorage.setItem(key, value);
-          }
-        } catch (e) {
-          // Ignorar erros de parsing
+  // Sincronizar cookies entre domínios
+  function syncCookies() {
+    try {
+      // Obter todos os cookies
+      var allCookies = document.cookie.split(';');
+      
+      // Para cada cookie, garantir que ele esteja disponível para o domínio raiz
+      for (var i = 0; i < allCookies.length; i++) {
+        var cookie = allCookies[i].trim();
+        if (cookie) {
+          var cookieParts = cookie.split('=');
+          var cookieName = cookieParts[0];
+          var cookieValue = cookieParts.slice(1).join('=');
+          
+          // Definir o cookie para o domínio raiz
+          document.cookie = cookieName + '=' + cookieValue + '; path=/; domain=.tenhopedido.com';
         }
       }
-      return value;
-    };
-  });
+    } catch (e) {
+      console.error('Erro ao sincronizar cookies:', e);
+    }
+  }
+  
+  // Executar a sincronização de cookies periodicamente
+  setInterval(syncCookies, 2000);
+  
+  // Executar a sincronização de cookies imediatamente
+  syncCookies();
+  
+  // Executar a sincronização de cookies antes de atualizar a página
+  window.addEventListener('beforeunload', syncCookies);
+  
+  // Corrigir problemas com o objeto localStorage
+  var originalGetItem = localStorage.getItem;
+  localStorage.getItem = function(key) {
+    var value = originalGetItem.call(this, key);
+    if (key && key.includes('bubble_') && value) {
+      try {
+        var parsed = JSON.parse(value);
+        if (parsed && typeof parsed === 'object') {
+          // Substituir todas as ocorrências do domínio principal pelo subdomínio
+          value = JSON.stringify(parsed).replace(new RegExp('${MAIN_DOMAIN}', 'g'), '${SUBDOMAIN}');
+          localStorage.setItem(key, value);
+        }
+      } catch (e) {
+        // Ignorar erros de parsing
+      }
+    }
+    return value;
+  };
+  
+  // Corrigir problemas com o objeto sessionStorage
+  var originalSessionGetItem = sessionStorage.getItem;
+  sessionStorage.getItem = function(key) {
+    var value = originalSessionGetItem.call(this, key);
+    if (key && key.includes('bubble_') && value) {
+      try {
+        var parsed = JSON.parse(value);
+        if (parsed && typeof parsed === 'object') {
+          // Substituir todas as ocorrências do domínio principal pelo subdomínio
+          value = JSON.stringify(parsed).replace(new RegExp('${MAIN_DOMAIN}', 'g'), '${SUBDOMAIN}');
+          sessionStorage.setItem(key, value);
+        }
+      } catch (e) {
+        // Ignorar erros de parsing
+      }
+    }
+    return value;
+  };
 </script>`;
             
             // Inserir o script após a tag <head>
